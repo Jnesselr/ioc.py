@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import abc
 import inspect
+import threading
 import types
 import typing
 from typing import Optional, TypeVar, Union
@@ -98,11 +99,13 @@ def _unwrap_optional(annotation) -> tuple[bool, type]:
 
 class Resolver:
     _global_instance: Optional[Resolver] = None
+    _global_lock: threading.Lock = threading.Lock()
 
     def __init__(self):
         self._singletons: dict = {}
         self._factories: dict = {}
         self._singletons[Resolver] = self
+        self._lock = threading.RLock()
 
     def __call__(self, cls: type[T], *args, **kwargs) -> T:
         if cls in self._singletons:
@@ -216,7 +219,11 @@ class Resolver:
         instance = cls(*bound.args, **bound.kwargs)
 
         if inspect.isclass(cls) and Singleton in inspect.getmro(cls):
-            self._singletons[cls] = instance
+            with self._lock:
+                if cls not in self._singletons:
+                    self._singletons[cls] = instance
+                else:
+                    instance = self._singletons[cls]
 
         return instance
 
@@ -232,7 +239,8 @@ class Resolver:
             if factory is None:
                 def factory(*a, **kw):
                     return self._make(base_type, *a, **kw)
-            self._factories[cls] = factory
+            with self._lock:
+                self._factories[cls] = factory
             return
         if _is_primitive(cls):
             raise UnresolvablePrimitive(
@@ -242,7 +250,8 @@ class Resolver:
         if factory is None:
             def factory(*a, **kw):
                 return self._make(cls, *a, **kw)
-        self._factories[cls] = factory
+        with self._lock:
+            self._factories[cls] = factory
 
     def singleton(self, cls_or_instance, instance=None) -> T:  # type: ignore[misc]
         """Register or retrieve a singleton.
@@ -262,13 +271,15 @@ class Resolver:
                     type_=base_type,
                 )
             if instance is None:
-                if key in self._singletons:
-                    return self._singletons[key]
-                instance = self._make(base_type)
-                self._singletons[key] = instance
+                with self._lock:
+                    if key in self._singletons:
+                        return self._singletons[key]
+                    instance = self._make(base_type)
+                    self._singletons[key] = instance
                 return instance
             _check_instance_type(base_type, instance)
-            self._singletons[key] = instance
+            with self._lock:
+                self._singletons[key] = instance
             return instance
 
         target_cls = (
@@ -284,10 +295,11 @@ class Resolver:
 
         if instance is None:
             if inspect.isclass(cls_or_instance):
-                if cls_or_instance in self._singletons:
-                    return self._singletons[cls_or_instance]
-                instance = self._make(cls_or_instance)
-                self._singletons[cls_or_instance] = instance
+                with self._lock:
+                    if cls_or_instance in self._singletons:
+                        return self._singletons[cls_or_instance]
+                    instance = self._make(cls_or_instance)
+                    self._singletons[cls_or_instance] = instance
                 return instance
             else:
                 instance = cls_or_instance
@@ -295,7 +307,8 @@ class Resolver:
         else:
             if inspect.isclass(cls_or_instance):
                 _check_instance_type(cls_or_instance, instance)
-        self._singletons[cls_or_instance] = instance
+        with self._lock:
+            self._singletons[cls_or_instance] = instance
         return instance
 
     def __contains__(self, cls: type) -> bool:
@@ -303,13 +316,14 @@ class Resolver:
 
     def clear(self, cls: type | None = None) -> None:
         """Remove a binding. With no argument, clears all bindings."""
-        if cls is None:
-            self._singletons.clear()
-            self._factories.clear()
-            self._singletons[Resolver] = self
-        else:
-            self._singletons.pop(cls, None)
-            self._factories.pop(cls, None)
+        with self._lock:
+            if cls is None:
+                self._singletons.clear()
+                self._factories.clear()
+                self._singletons[Resolver] = self
+            else:
+                self._singletons.pop(cls, None)
+                self._factories.pop(cls, None)
 
     def clone(self, *types: type) -> Resolver:
         """Return a new Resolver that inherits the specified singleton bindings.
@@ -317,30 +331,34 @@ class Resolver:
         With no arguments, copies all current singleton bindings.
         Raises UnboundTypeRequested if a requested type has no singleton binding.
         """
-        new_resolver = Resolver()
-        source = (
-            [t for t in self._singletons if t is not Resolver]
-            if not types
-            else list(types)
-        )
-        for t in source:
-            if t in self._singletons:
-                new_resolver._singletons[t] = self._singletons[t]
-            else:
-                raise UnboundTypeRequested(
-                    f"Cannot clone with type {t}: not bound as a singleton in this resolver",
-                    type_=t,
-                )
+        with self._lock:
+            new_resolver = Resolver()
+            source = (
+                [t for t in self._singletons if t is not Resolver]
+                if not types
+                else list(types)
+            )
+            for t in source:
+                if t in self._singletons:
+                    new_resolver._singletons[t] = self._singletons[t]
+                else:
+                    raise UnboundTypeRequested(
+                        f"Cannot clone with type {t}: not bound as a singleton in this resolver",
+                        type_=t,
+                    )
         return new_resolver
 
     @classmethod
     def get(cls) -> Resolver:
         """Return the process-wide singleton Resolver, creating it if needed."""
         if cls._global_instance is None:
-            cls._global_instance = Resolver()
+            with cls._global_lock:
+                if cls._global_instance is None:
+                    cls._global_instance = Resolver()
         return cls._global_instance
 
     @classmethod
     def reset(cls) -> None:
         """Discard the process-wide Resolver."""
-        cls._global_instance = None
+        with cls._global_lock:
+            cls._global_instance = None

@@ -1,3 +1,4 @@
+import threading
 from typing import Annotated, NewType, Optional
 
 import pytest
@@ -729,3 +730,62 @@ class TestInstanceTypeValidation:
         instance = _Base()
         resolver.singleton(FooBase, instance)
         assert resolver(FooBase) is instance
+
+
+# ---------------------------------------------------------------------------
+# Thread safety
+# ---------------------------------------------------------------------------
+
+class TestThreadSafety:
+    _N = 50
+
+    def test_singleton_method_returns_same_instance_under_contention(self, resolver: Resolver):
+        results = []
+        barrier = threading.Barrier(self._N)
+
+        def resolve():
+            barrier.wait()
+            results.append(resolver.singleton(NoArgumentClass))
+
+        threads = [threading.Thread(target=resolve) for _ in range(self._N)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert len(results) == self._N
+        assert all(r is results[0] for r in results)
+
+    def test_singleton_abc_auto_registration_returns_same_instance_under_contention(self, resolver: Resolver):
+        results = []
+        barrier = threading.Barrier(self._N)
+
+        def resolve():
+            barrier.wait()
+            results.append(resolver(AutoSingletonClass))
+
+        threads = [threading.Thread(target=resolve) for _ in range(self._N)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert len(results) == self._N
+        assert all(r is results[0] for r in results)
+
+    def test_global_get_returns_same_instance_under_contention(self):
+        results = []
+        barrier = threading.Barrier(self._N)
+
+        def get():
+            barrier.wait()
+            results.append(Resolver.get())
+
+        threads = [threading.Thread(target=get) for _ in range(self._N)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert len(results) == self._N
+        assert all(r is results[0] for r in results)
