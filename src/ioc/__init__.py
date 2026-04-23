@@ -6,6 +6,7 @@ from ioc._resolver import (
     UnboundTypeRequested,
     UnknownArgument,
     UnknownKeywordArgument,
+    UnresolvablePrimitive,
 )
 
 __all__ = [
@@ -16,4 +17,5 @@ __all__ = [
     "UnknownArgument",
     "UnknownKeywordArgument",
     "UnboundTypeRequested",
+    "UnresolvablePrimitive",
 ]

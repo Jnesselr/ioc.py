@@ -39,6 +39,16 @@ class UnboundTypeRequested(ResolutionFailure):
         self.type = type_
 
 
+class UnresolvablePrimitive(ResolutionFailure):
+    def __init__(self, message: str, type_: type):
+        super().__init__(message)
+        self.type = type_
+
+
+def _is_primitive(t: type) -> bool:
+    return getattr(t, '__module__', None) == 'builtins'
+
+
 class Singleton(abc.ABC):
     """Inherit from this to make a class auto-register as a singleton on first resolution."""
 
@@ -122,7 +132,7 @@ class Resolver:
             args_dict[arg_type] = arg
 
         cls_kwargs: dict = {}
-        for name, _param in params:
+        for name, param in params:
             if name in kwargs:
                 cls_kwargs[name] = kwargs.pop(name)
             elif name in hints:
@@ -133,6 +143,14 @@ class Resolver:
                     cls_kwargs[name] = args_dict.pop(inner_type)
                 elif is_opt and inner_type not in self:
                     cls_kwargs[name] = None
+                elif param.default is not inspect.Parameter.empty and inner_type not in self:
+                    pass  # unregistered type with a default — let Python apply it
+                elif _is_primitive(inner_type):
+                    raise UnresolvablePrimitive(
+                        f"`{inner_type.__name__}` is a primitive type; "
+                        f"provide it explicitly or give `{cls.__name__}.{name}` a default value",
+                        type_=inner_type,
+                    )
                 else:
                     cls_kwargs[name] = self(inner_type)
 
@@ -156,14 +174,10 @@ class Resolver:
                     argument=arg,
                 )
 
+        bound = sig.bind_partial(**cls_kwargs)
         if args_dict:
-            # Remaining positional args belong in *args. Use bind_partial so that
-            # named params already in cls_kwargs are placed correctly before *args.
-            bound = sig.bind_partial(**cls_kwargs)
             bound.arguments[var_positional_name] = tuple(args_dict.values())
-            instance = cls(*bound.args, **bound.kwargs)
-        else:
-            instance = cls(**cls_kwargs)
+        instance = cls(*bound.args, **bound.kwargs)
 
         if inspect.isclass(cls) and Singleton in inspect.getmro(cls):
             self._singletons[cls] = instance
@@ -172,6 +186,11 @@ class Resolver:
 
     def bind(self, cls: type[T], factory=None) -> None:
         """Register a factory for cls. Each call to resolver(cls) invokes the factory anew."""
+        if _is_primitive(cls):
+            raise UnresolvablePrimitive(
+                f"`{cls.__name__}` is a primitive type and cannot be registered with the resolver",
+                type_=cls,
+            )
         if factory is None:
             def factory(*a, **kw):
                 return self._make(cls, *a, **kw)
@@ -185,6 +204,17 @@ class Resolver:
           resolver.singleton(MyClass, my_instance) # register existing instance
           resolver.singleton(my_instance)          # infer class from instance
         """
+        target_cls = (
+            cls_or_instance
+            if inspect.isclass(cls_or_instance) or instance is not None
+            else type(cls_or_instance)
+        )
+        if _is_primitive(target_cls):
+            raise UnresolvablePrimitive(
+                f"`{target_cls.__name__}` is a primitive type and cannot be registered with the resolver",
+                type_=target_cls,
+            )
+
         if instance is None:
             if inspect.isclass(cls_or_instance):
                 if cls_or_instance in self._singletons:

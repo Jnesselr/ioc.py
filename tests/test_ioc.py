@@ -10,6 +10,7 @@ from ioc import (
     UnboundTypeRequested,
     UnknownArgument,
     UnknownKeywordArgument,
+    UnresolvablePrimitive,
 )
 
 
@@ -59,6 +60,16 @@ class TwoInts:
 
 class AutoSingletonClass(Singleton):
     pass
+
+
+class HasIntDefault:
+    def __init__(self, count: int = 5):
+        self.count = count
+
+
+class HasClassDefault:
+    def __init__(self, dep: NoArgumentClass = None):
+        self.dep = dep
 
 
 class HasVarArgs:
@@ -492,3 +503,51 @@ class TestVariadicPassthrough:
         obj = resolver(HasVarArgs)
         assert isinstance(obj.dep, NoArgumentClass)
         assert obj.args == ()
+
+
+# ---------------------------------------------------------------------------
+# Default values
+# ---------------------------------------------------------------------------
+
+class TestDefaults:
+    def test_primitive_with_default_uses_default(self, resolver: Resolver):
+        obj = resolver(HasIntDefault)
+        assert obj.count == 5
+
+    def test_primitive_with_no_default_raises(self, resolver: Resolver):
+        with pytest.raises(UnresolvablePrimitive) as exc_info:
+            resolver(OneInt)
+        assert exc_info.value.type is int
+
+    def test_class_default_used_when_type_not_registered(self, resolver: Resolver):
+        obj = resolver(HasClassDefault)
+        assert obj.dep is None
+
+    def test_class_default_overridden_when_type_is_registered(self, resolver: Resolver):
+        dep = resolver.singleton(NoArgumentClass)
+        obj = resolver(HasClassDefault)
+        assert obj.dep is dep
+
+    def test_kwarg_overrides_default(self, resolver: Resolver):
+        explicit = NoArgumentClass()
+        obj = resolver(HasClassDefault, dep=explicit)
+        assert obj.dep is explicit
+
+    def test_cannot_register_primitive_via_singleton_class_form(self, resolver: Resolver):
+        with pytest.raises(UnresolvablePrimitive) as exc_info:
+            resolver.singleton(int, 99)
+        assert exc_info.value.type is int
+
+    def test_cannot_register_primitive_via_singleton_instance_form(self, resolver: Resolver):
+        with pytest.raises(UnresolvablePrimitive) as exc_info:
+            resolver.singleton(42)
+        assert exc_info.value.type is int
+
+    def test_cannot_register_primitive_via_bind(self, resolver: Resolver):
+        with pytest.raises(UnresolvablePrimitive) as exc_info:
+            resolver.bind(str)
+        assert exc_info.value.type is str
+
+    def test_unresolvable_primitive_is_resolution_failure(self, resolver: Resolver):
+        with pytest.raises(ResolutionFailure):
+            resolver(OneInt)
