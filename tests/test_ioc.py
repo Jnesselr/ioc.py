@@ -68,7 +68,7 @@ class HasIntDefault:
 
 
 class HasClassDefault:
-    def __init__(self, dep: NoArgumentClass = None):
+    def __init__(self, dep: NoArgumentClass | None = None):
         self.dep = dep
 
 
@@ -338,6 +338,10 @@ class TestGlobalResolver:
         r2 = Resolver.get()
         assert r1 is not r2
 
+    def test_get_returns_self_resolving_resolver(self):
+        r = Resolver.get()
+        assert r(Resolver) is r
+
 
 # ---------------------------------------------------------------------------
 # clone()
@@ -445,16 +449,6 @@ class TestClearAdditional:
 
 
 # ---------------------------------------------------------------------------
-# Global resolver
-# ---------------------------------------------------------------------------
-
-class TestGlobalResolverAdditional:
-    def test_get_returns_self_resolving_resolver(self):
-        r = Resolver.get()
-        assert r(Resolver) is r
-
-
-# ---------------------------------------------------------------------------
 # Exception hierarchy
 # ---------------------------------------------------------------------------
 
@@ -474,6 +468,15 @@ class TestExceptionHierarchy:
     def test_unknown_kwarg_is_unknown_argument(self, resolver: Resolver):
         with pytest.raises(UnknownArgument):
             resolver(NoArgumentClass, a=3)
+
+    def test_unresolvable_primitive_is_resolution_failure(self, resolver: Resolver):
+        with pytest.raises(ResolutionFailure):
+            resolver(OneInt)
+
+    def test_resolving_primitive_directly_raises(self, resolver: Resolver):
+        with pytest.raises(UnresolvablePrimitive) as exc_info:
+            resolver(int)
+        assert exc_info.value.type is int
 
 
 # ---------------------------------------------------------------------------
@@ -547,7 +550,3 @@ class TestDefaults:
         with pytest.raises(UnresolvablePrimitive) as exc_info:
             resolver.bind(str)
         assert exc_info.value.type is str
-
-    def test_unresolvable_primitive_is_resolution_failure(self, resolver: Resolver):
-        with pytest.raises(ResolutionFailure):
-            resolver(OneInt)

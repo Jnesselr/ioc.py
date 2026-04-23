@@ -83,6 +83,11 @@ class Resolver:
             return self._singletons[cls]
         if cls in self._factories:
             return self._factories[cls](*args, **kwargs)
+        if _is_primitive(cls):
+            raise UnresolvablePrimitive(
+                f"`{cls.__name__}` is a primitive type and cannot be resolved",
+                type_=cls,
+            )
         return self._make(cls, *args, **kwargs)
 
     def _make(self, cls: type[T], *args, **kwargs) -> T:
@@ -92,8 +97,6 @@ class Resolver:
             hints = {}
         hints.pop('return', None)
 
-        # inspect.signature(cls) gives the constructor signature without 'self',
-        # which is what we need for bind_partial later.
         sig = inspect.signature(cls)
 
         # Classes with no custom __init__ inherit object.__init__(*args, **kwargs).
@@ -231,7 +234,7 @@ class Resolver:
     def __contains__(self, cls: type) -> bool:
         return cls in self._singletons or cls in self._factories
 
-    def clear(self, cls: type = None) -> None:
+    def clear(self, cls: type | None = None) -> None:
         """Remove a binding. With no argument, clears all bindings."""
         if cls is None:
             self._singletons.clear()
