@@ -82,12 +82,31 @@ class Resolver:
             hints = {}
         hints.pop('return', None)
 
-        sig = inspect.signature(cls.__init__)
+        # inspect.signature(cls) gives the constructor signature without 'self',
+        # which is what we need for bind_partial later.
+        sig = inspect.signature(cls)
+
+        # Classes with no custom __init__ inherit object.__init__(*args, **kwargs).
+        # Treat them as having no variadic params so we still raise our custom errors
+        # for unexpected arguments rather than silently passing them to object.__init__.
+        if cls.__init__ is object.__init__:
+            var_positional_name = None
+            has_var_keyword = False
+        else:
+            var_positional_name = next(
+                (name for name, p in sig.parameters.items()
+                 if p.kind == inspect.Parameter.VAR_POSITIONAL),
+                None,
+            )
+            has_var_keyword = any(
+                p.kind == inspect.Parameter.VAR_KEYWORD
+                for p in sig.parameters.values()
+            )
+
         params = [
             (name, param)
             for name, param in sig.parameters.items()
-            if name != 'self'
-            and param.kind
+            if param.kind
             not in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD)
         ]
 
@@ -117,7 +136,7 @@ class Resolver:
                 else:
                     cls_kwargs[name] = self(inner_type)
 
-        if args_dict:
+        if args_dict and var_positional_name is None:
             arg_type, arg = next(iter(args_dict.items()))
             raise UnknownArgument(
                 f"Cannot determine where to use argument `{arg}` of type `{arg_type}`",
@@ -126,15 +145,25 @@ class Resolver:
             )
 
         if kwargs:
-            name, arg = next(iter(kwargs.items()))
-            raise UnknownKeywordArgument(
-                f"Did not find keyword argument `{name}` in `{cls.__name__}.__init__`",
-                argument_name=name,
-                argument_type=type(arg),
-                argument=arg,
-            )
+            if has_var_keyword:
+                cls_kwargs.update(kwargs)
+            else:
+                name, arg = next(iter(kwargs.items()))
+                raise UnknownKeywordArgument(
+                    f"Did not find keyword argument `{name}` in `{cls.__name__}.__init__`",
+                    argument_name=name,
+                    argument_type=type(arg),
+                    argument=arg,
+                )
 
-        instance = cls(**cls_kwargs)
+        if args_dict:
+            # Remaining positional args belong in *args. Use bind_partial so that
+            # named params already in cls_kwargs are placed correctly before *args.
+            bound = sig.bind_partial(**cls_kwargs)
+            bound.arguments[var_positional_name] = tuple(args_dict.values())
+            instance = cls(*bound.args, **bound.kwargs)
+        else:
+            instance = cls(**cls_kwargs)
 
         if inspect.isclass(cls) and Singleton in inspect.getmro(cls):
             self._singletons[cls] = instance
@@ -170,7 +199,7 @@ class Resolver:
         return instance
 
     def __contains__(self, cls: type) -> bool:
-        return cls in self._singletons
+        return cls in self._singletons or cls in self._factories
 
     def clear(self, cls: type = None) -> None:
         """Remove a binding. With no argument, clears all bindings."""

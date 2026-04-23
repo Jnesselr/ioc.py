@@ -4,6 +4,7 @@ import pytest
 
 from ioc import (
     Resolver,
+    ResolutionFailure,
     Singleton,
     DuplicateArgOfSameType,
     UnboundTypeRequested,
@@ -58,6 +59,18 @@ class TwoInts:
 
 class AutoSingletonClass(Singleton):
     pass
+
+
+class HasVarArgs:
+    def __init__(self, dep: NoArgumentClass, *args):
+        self.dep = dep
+        self.args = args
+
+
+class HasVarKwargs:
+    def __init__(self, dep: NoArgumentClass, **kwargs):
+        self.dep = dep
+        self.kwargs = kwargs
 
 
 # ---------------------------------------------------------------------------
@@ -118,12 +131,24 @@ class TestBasicResolution:
         assert obj.log is log
         assert obj.acs is acs
 
-    def test_contains_only_for_singletons(self, resolver: Resolver):
+    def test_contains_true_for_singleton(self, resolver: Resolver):
         assert NoArgumentClass not in resolver
         resolver.singleton(NoArgumentClass)
         assert NoArgumentClass in resolver
+
+    def test_contains_true_for_factory_binding(self, resolver: Resolver):
+        assert NoArgumentClass not in resolver
+        resolver.bind(NoArgumentClass)
+        assert NoArgumentClass in resolver
+
+    def test_contains_false_for_implicitly_resolved_class(self, resolver: Resolver):
         resolver(OneAnnotatedArgumentClass)
         assert OneAnnotatedArgumentClass not in resolver
+
+    def test_optional_resolves_via_factory_when_bound(self, resolver: Resolver):
+        resolver.bind(NoArgumentClass)
+        obj = resolver(OptionalAnnotatedArgumentClass)
+        assert isinstance(obj.arg, NoArgumentClass)
 
     def test_singleton_abc_auto_registers(self, resolver: Resolver):
         first = resolver(AutoSingletonClass)
@@ -344,3 +369,126 @@ class TestCloning:
     def test_cloned_resolver_resolves_to_itself(self, resolver: Resolver):
         r2 = resolver.clone()
         assert r2(Resolver) is r2
+
+    def test_clone_does_not_copy_factory_bindings(self, resolver: Resolver):
+        call_count = 0
+
+        def factory():
+            nonlocal call_count
+            call_count += 1
+            return NoArgumentClass()
+
+        resolver.bind(NoArgumentClass, factory)
+        r2 = resolver.clone()
+
+        assert NoArgumentClass not in r2
+        r2(NoArgumentClass)
+        assert call_count == 0  # clone's resolve went through _make, not the factory
+
+
+# ---------------------------------------------------------------------------
+# Singleton ABC
+# ---------------------------------------------------------------------------
+
+class TestSingletonABC:
+    def test_auto_registers_on_first_resolve(self, resolver: Resolver):
+        first = resolver(AutoSingletonClass)
+        second = resolver(AutoSingletonClass)
+        assert first is second
+        assert AutoSingletonClass in resolver
+
+    def test_survives_clear_of_specific_class(self, resolver: Resolver):
+        first = resolver(AutoSingletonClass)
+        resolver.clear(AutoSingletonClass)
+        second = resolver(AutoSingletonClass)
+        assert second is not first
+        assert AutoSingletonClass in resolver
+
+    def test_fresh_after_reset(self):
+        r1 = Resolver.get()
+        first = r1(AutoSingletonClass)
+        Resolver.reset()
+        r2 = Resolver.get()
+        second = r2(AutoSingletonClass)
+        assert second is not first
+        assert AutoSingletonClass in r2
+
+
+# ---------------------------------------------------------------------------
+# clear() — additional cases
+# ---------------------------------------------------------------------------
+
+class TestClearAdditional:
+    def test_clear_all_removes_factory_bindings(self, resolver: Resolver):
+        call_count = 0
+
+        def factory():
+            nonlocal call_count
+            call_count += 1
+            return NoArgumentClass()
+
+        resolver.bind(NoArgumentClass, factory)
+        resolver.clear()
+        resolver(NoArgumentClass)
+        assert call_count == 0  # factory is gone; implicit _make used instead
+
+
+# ---------------------------------------------------------------------------
+# Global resolver
+# ---------------------------------------------------------------------------
+
+class TestGlobalResolverAdditional:
+    def test_get_returns_self_resolving_resolver(self):
+        r = Resolver.get()
+        assert r(Resolver) is r
+
+
+# ---------------------------------------------------------------------------
+# Exception hierarchy
+# ---------------------------------------------------------------------------
+
+class TestExceptionHierarchy:
+    def test_duplicate_arg_is_resolution_failure(self, resolver: Resolver):
+        with pytest.raises(ResolutionFailure):
+            resolver(TwoInts, 3, 4)
+
+    def test_unknown_argument_is_resolution_failure(self, resolver: Resolver):
+        with pytest.raises(ResolutionFailure):
+            resolver(NoArgumentClass, 3)
+
+    def test_unknown_kwarg_is_resolution_failure(self, resolver: Resolver):
+        with pytest.raises(ResolutionFailure):
+            resolver(NoArgumentClass, a=3)
+
+    def test_unknown_kwarg_is_unknown_argument(self, resolver: Resolver):
+        with pytest.raises(UnknownArgument):
+            resolver(NoArgumentClass, a=3)
+
+
+# ---------------------------------------------------------------------------
+# *args and **kwargs passthrough
+# ---------------------------------------------------------------------------
+
+class TestVariadicPassthrough:
+    def test_extra_kwargs_passed_through_to_var_keyword(self, resolver: Resolver):
+        dep = resolver.singleton(NoArgumentClass)
+        obj = resolver(HasVarKwargs, extra=42, label="hi")
+        assert obj.dep is dep
+        assert obj.kwargs == {'extra': 42, 'label': 'hi'}
+
+    def test_named_dep_resolved_and_unmatched_kwargs_passed_through(self, resolver: Resolver):
+        resolver.singleton(NoArgumentClass)
+        obj = resolver(HasVarKwargs, dep=NoArgumentClass(), note="x")
+        assert isinstance(obj.dep, NoArgumentClass)
+        assert obj.kwargs == {'note': 'x'}
+
+    def test_extra_positional_args_passed_through_to_var_positional(self, resolver: Resolver):
+        dep = resolver.singleton(NoArgumentClass)
+        obj = resolver(HasVarArgs, "extra", 42)
+        assert obj.dep is dep
+        assert obj.args == ("extra", 42)
+
+    def test_no_extra_args_var_positional_is_empty(self, resolver: Resolver):
+        obj = resolver(HasVarArgs)
+        assert isinstance(obj.dep, NoArgumentClass)
+        assert obj.args == ()
