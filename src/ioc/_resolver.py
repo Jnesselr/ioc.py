@@ -45,6 +45,13 @@ class UnresolvablePrimitive(ResolutionFailure):
         self.type = type_
 
 
+class InvalidBinding(ResolutionFailure):
+    def __init__(self, message: str, expected_type: type, instance):
+        super().__init__(message)
+        self.expected_type = expected_type
+        self.instance = instance
+
+
 def _is_primitive(t: type) -> bool:
     return getattr(t, '__module__', None) == 'builtins'
 
@@ -54,6 +61,18 @@ def _get_base_type(t):
     if typing.get_origin(t) is typing.Annotated:
         return typing.get_args(t)[0]
     return t
+
+
+def _check_instance_type(cls: type, instance) -> None:
+    try:
+        if not isinstance(instance, cls):
+            raise InvalidBinding(
+                f"Cannot register instance of `{type(instance).__name__}` as `{cls.__name__}`",
+                expected_type=cls,
+                instance=instance,
+            )
+    except TypeError:
+        pass  # e.g. non-runtime_checkable Protocol
 
 
 class Singleton(abc.ABC):
@@ -248,6 +267,7 @@ class Resolver:
                 instance = self._make(base_type)
                 self._singletons[key] = instance
                 return instance
+            _check_instance_type(base_type, instance)
             self._singletons[key] = instance
             return instance
 
@@ -272,6 +292,9 @@ class Resolver:
             else:
                 instance = cls_or_instance
                 cls_or_instance = type(instance)
+        else:
+            if inspect.isclass(cls_or_instance):
+                _check_instance_type(cls_or_instance, instance)
         self._singletons[cls_or_instance] = instance
         return instance
 

@@ -7,6 +7,7 @@ from ioc import (
     ResolutionFailure,
     Singleton,
     DuplicateArgOfSameType,
+    InvalidBinding,
     UnboundTypeRequested,
     UnknownArgument,
     UnknownKeywordArgument,
@@ -680,3 +681,51 @@ class TestAnnotated:
         with pytest.raises(UnresolvablePrimitive) as exc_info:
             resolver.bind(AnnotatedStr)
         assert exc_info.value.type is str
+
+
+# ---------------------------------------------------------------------------
+# Instance type validation
+# ---------------------------------------------------------------------------
+
+class _Sub(NoArgumentClass):
+    pass
+
+
+class TestInstanceTypeValidation:
+    def test_valid_instance_registers_fine(self, resolver: Resolver):
+        instance = NoArgumentClass()
+        resolver.singleton(NoArgumentClass, instance)
+        assert resolver(NoArgumentClass) is instance
+
+    def test_subclass_instance_registers_fine(self, resolver: Resolver):
+        instance = _Sub()
+        resolver.singleton(NoArgumentClass, instance)
+        assert resolver(NoArgumentClass) is instance
+
+    def test_wrong_type_raises_invalid_binding(self, resolver: Resolver):
+        with pytest.raises(InvalidBinding) as exc_info:
+            resolver.singleton(NoArgumentClass, OneAnnotatedArgumentClass(NoArgumentClass()))
+        ex = exc_info.value
+        assert ex.expected_type is NoArgumentClass
+        assert isinstance(ex.instance, OneAnnotatedArgumentClass)
+
+    def test_invalid_binding_is_resolution_failure(self, resolver: Resolver):
+        with pytest.raises(ResolutionFailure):
+            resolver.singleton(NoArgumentClass, OneAnnotatedArgumentClass(NoArgumentClass()))
+
+    def test_instance_only_form_always_valid(self, resolver: Resolver):
+        instance = NoArgumentClass()
+        returned = resolver.singleton(instance)
+        assert returned is instance
+
+    def test_annotated_wrong_type_raises_invalid_binding(self, resolver: Resolver):
+        with pytest.raises(InvalidBinding) as exc_info:
+            resolver.singleton(FooBase, OneAnnotatedArgumentClass(NoArgumentClass()))
+        ex = exc_info.value
+        assert ex.expected_type is _Base
+        assert isinstance(ex.instance, OneAnnotatedArgumentClass)
+
+    def test_annotated_valid_instance_registers_fine(self, resolver: Resolver):
+        instance = _Base()
+        resolver.singleton(FooBase, instance)
+        assert resolver(FooBase) is instance
