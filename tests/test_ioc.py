@@ -1,5 +1,6 @@
+import abc
 import threading
-from typing import Annotated, NewType, Optional
+from typing import Annotated, NewType, Optional, Protocol
 
 import pytest
 
@@ -692,6 +693,41 @@ class _Sub(NoArgumentClass):
     pass
 
 
+# ---------------------------------------------------------------------------
+# Abstract/Protocol binding test helpers
+# ---------------------------------------------------------------------------
+
+class _AbstractService(abc.ABC):
+    @abc.abstractmethod
+    def value(self) -> int: ...
+
+
+class _ConcreteService(_AbstractService):
+    def value(self) -> int:
+        return 42
+
+
+class _ConcreteServiceWithDep(_AbstractService):
+    def __init__(self, dep: NoArgumentClass):
+        self.dep = dep
+
+    def value(self) -> int:
+        return 0
+
+
+class _UnrelatedService:
+    pass
+
+
+class _ServiceProtocol(Protocol):
+    def value(self) -> int: ...
+
+
+class _ProtocolImpl:
+    def value(self) -> int:
+        return 99
+
+
 class TestInstanceTypeValidation:
     def test_valid_instance_registers_fine(self, resolver: Resolver):
         instance = NoArgumentClass()
@@ -789,3 +825,56 @@ class TestThreadSafety:
 
         assert len(results) == self._N
         assert all(r is results[0] for r in results)
+
+
+# ---------------------------------------------------------------------------
+# Abstract / Protocol → concrete class binding
+# ---------------------------------------------------------------------------
+
+class TestAbstractBinding:
+    def test_bind_abstract_to_concrete_resolves_concrete(self, resolver: Resolver):
+        resolver.bind(_AbstractService, _ConcreteService)
+        result = resolver(_AbstractService)
+        assert isinstance(result, _ConcreteService)
+        assert result.value() == 42
+
+    def test_bind_abstract_to_concrete_creates_new_instance_each_time(self, resolver: Resolver):
+        resolver.bind(_AbstractService, _ConcreteService)
+        assert resolver(_AbstractService) is not resolver(_AbstractService)
+
+    def test_bind_abstract_to_concrete_resolves_concrete_dependencies(self, resolver: Resolver):
+        dep = resolver.singleton(NoArgumentClass)
+        resolver.bind(_AbstractService, _ConcreteServiceWithDep)
+        result = resolver(_AbstractService)
+        assert isinstance(result, _ConcreteServiceWithDep)
+        assert result.dep is dep
+
+    def test_bind_abstract_to_unrelated_type_raises(self, resolver: Resolver):
+        with pytest.raises(InvalidBinding) as exc_info:
+            resolver.bind(_AbstractService, _UnrelatedService)
+        ex = exc_info.value
+        assert ex.expected_type is _AbstractService
+        assert ex.instance is _UnrelatedService
+
+    def test_bind_protocol_to_impl_skips_subclass_check(self, resolver: Resolver):
+        # _ServiceProtocol is not @runtime_checkable so issubclass raises TypeError;
+        # _check_subclass silently passes and the binding works
+        resolver.bind(_ServiceProtocol, _ProtocolImpl)
+        result = resolver(_ServiceProtocol)
+        assert isinstance(result, _ProtocolImpl)
+        assert result.value() == 99
+
+    def test_bind_abstract_to_primitive_raises(self, resolver: Resolver):
+        with pytest.raises(UnresolvablePrimitive) as exc_info:
+            resolver.bind(_AbstractService, int)
+        assert exc_info.value.type is int
+
+    def test_abstract_bound_to_concrete_in_resolver(self, resolver: Resolver):
+        resolver.bind(_AbstractService, _ConcreteService)
+        assert _AbstractService in resolver
+
+    def test_bind_abstract_to_concrete_overridable_by_singleton(self, resolver: Resolver):
+        resolver.bind(_AbstractService, _ConcreteService)
+        instance = _ConcreteService()
+        resolver.singleton(_AbstractService, instance)
+        assert resolver(_AbstractService) is instance

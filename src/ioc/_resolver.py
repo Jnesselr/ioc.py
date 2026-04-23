@@ -76,6 +76,23 @@ def _check_instance_type(cls: type, instance) -> None:
         pass  # e.g. non-runtime_checkable Protocol
 
 
+def _check_subclass(abstract: type, concrete: type) -> None:
+    if _is_primitive(concrete):
+        raise UnresolvablePrimitive(
+            f"`{concrete.__name__}` is a primitive type and cannot be used as a concrete binding",
+            type_=concrete,
+        )
+    try:
+        if not issubclass(concrete, abstract):
+            raise InvalidBinding(
+                f"`{concrete.__name__}` is not a subclass of `{abstract.__name__}`",
+                expected_type=abstract,
+                instance=concrete,
+            )
+    except TypeError:
+        pass  # e.g. non-runtime_checkable Protocol
+
+
 class Singleton(abc.ABC):
     """Inherit from this to make a class auto-register as a singleton on first resolution."""
 
@@ -239,6 +256,11 @@ class Resolver:
             if factory is None:
                 def factory(*a, **kw):
                     return self._make(base_type, *a, **kw)
+            elif inspect.isclass(factory):
+                _check_subclass(base_type, factory)
+                concrete_cls = factory
+                def factory(*a, **kw):
+                    return self._make(concrete_cls, *a, **kw)
             with self._lock:
                 self._factories[cls] = factory
             return
@@ -250,6 +272,11 @@ class Resolver:
         if factory is None:
             def factory(*a, **kw):
                 return self._make(cls, *a, **kw)
+        elif inspect.isclass(factory):
+            _check_subclass(cls, factory)
+            concrete_cls = factory
+            def factory(*a, **kw):
+                return self._make(concrete_cls, *a, **kw)
         with self._lock:
             self._factories[cls] = factory
 
