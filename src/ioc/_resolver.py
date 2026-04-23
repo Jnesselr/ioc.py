@@ -49,6 +49,13 @@ def _is_primitive(t: type) -> bool:
     return getattr(t, '__module__', None) == 'builtins'
 
 
+def _get_base_type(t):
+    """For Annotated[T, ...], return T. Otherwise return t unchanged."""
+    if typing.get_origin(t) is typing.Annotated:
+        return typing.get_args(t)[0]
+    return t
+
+
 class Singleton(abc.ABC):
     """Inherit from this to make a class auto-register as a singleton on first resolution."""
 
@@ -83,6 +90,12 @@ class Resolver:
             return self._singletons[cls]
         if cls in self._factories:
             return self._factories[cls](*args, **kwargs)
+        if typing.get_origin(cls) is typing.Annotated:
+            raise UnboundTypeRequested(
+                f"Annotated type `{cls}` is not registered; "
+                f"call resolver.singleton() or resolver.bind() first",
+                type_=cls,
+            )
         if _is_primitive(cls):
             raise UnresolvablePrimitive(
                 f"`{cls.__name__}` is a primitive type and cannot be resolved",
@@ -92,7 +105,7 @@ class Resolver:
 
     def _make(self, cls: type[T], *args, **kwargs) -> T:
         try:
-            hints = typing.get_type_hints(cls.__init__)
+            hints = typing.get_type_hints(cls.__init__, include_extras=True)
         except Exception:
             hints = {}
         hints.pop('return', None)
@@ -141,6 +154,7 @@ class Resolver:
             elif name in hints:
                 annotation = hints[name]
                 is_opt, inner_type = _unwrap_optional(annotation)
+                base_type = _get_base_type(inner_type)
 
                 if inner_type in args_dict:
                     cls_kwargs[name] = args_dict.pop(inner_type)
@@ -148,11 +162,11 @@ class Resolver:
                     cls_kwargs[name] = None
                 elif param.default is not inspect.Parameter.empty and inner_type not in self:
                     pass  # unregistered type with a default — let Python apply it
-                elif _is_primitive(inner_type):
+                elif _is_primitive(base_type):
                     raise UnresolvablePrimitive(
-                        f"`{inner_type.__name__}` is a primitive type; "
+                        f"`{base_type.__name__}` is a primitive type; "
                         f"provide it explicitly or give `{cls.__name__}.{name}` a default value",
-                        type_=inner_type,
+                        type_=base_type,
                     )
                 else:
                     cls_kwargs[name] = self(inner_type)
@@ -189,6 +203,18 @@ class Resolver:
 
     def bind(self, cls: type[T], factory=None) -> None:
         """Register a factory for cls. Each call to resolver(cls) invokes the factory anew."""
+        if typing.get_origin(cls) is typing.Annotated:
+            base_type = typing.get_args(cls)[0]
+            if _is_primitive(base_type):
+                raise UnresolvablePrimitive(
+                    f"`{base_type.__name__}` is a primitive type and cannot be registered with the resolver",
+                    type_=base_type,
+                )
+            if factory is None:
+                def factory(*a, **kw):
+                    return self._make(base_type, *a, **kw)
+            self._factories[cls] = factory
+            return
         if _is_primitive(cls):
             raise UnresolvablePrimitive(
                 f"`{cls.__name__}` is a primitive type and cannot be registered with the resolver",
@@ -206,7 +232,25 @@ class Resolver:
           resolver.singleton(MyClass)              # create and register
           resolver.singleton(MyClass, my_instance) # register existing instance
           resolver.singleton(my_instance)          # infer class from instance
+          resolver.singleton(Annotated[T, spec], my_instance)  # qualified binding
         """
+        if typing.get_origin(cls_or_instance) is typing.Annotated:
+            key = cls_or_instance
+            base_type = typing.get_args(cls_or_instance)[0]
+            if _is_primitive(base_type):
+                raise UnresolvablePrimitive(
+                    f"`{base_type.__name__}` is a primitive type and cannot be registered with the resolver",
+                    type_=base_type,
+                )
+            if instance is None:
+                if key in self._singletons:
+                    return self._singletons[key]
+                instance = self._make(base_type)
+                self._singletons[key] = instance
+                return instance
+            self._singletons[key] = instance
+            return instance
+
         target_cls = (
             cls_or_instance
             if inspect.isclass(cls_or_instance) or instance is not None

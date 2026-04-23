@@ -1,4 +1,4 @@
-from typing import NewType, Optional
+from typing import Annotated, NewType, Optional
 
 import pytest
 
@@ -12,6 +12,37 @@ from ioc import (
     UnknownKeywordArgument,
     UnresolvablePrimitive,
 )
+
+
+# ---------------------------------------------------------------------------
+# Annotated test helpers
+# ---------------------------------------------------------------------------
+
+class _Base:
+    pass
+
+
+class _FooQualifier:
+    pass
+
+
+class _BarQualifier:
+    pass
+
+
+FooBase = Annotated[_Base, _FooQualifier]
+BarBase = Annotated[_Base, _BarQualifier]
+
+
+class _UsesFooAndBar:
+    def __init__(self, foo: FooBase, bar: BarBase):
+        self.foo = foo
+        self.bar = bar
+
+
+class _UsesOptionalFoo:
+    def __init__(self, foo: Optional[FooBase] = None):
+        self.foo = foo
 
 
 # ---------------------------------------------------------------------------
@@ -549,4 +580,103 @@ class TestDefaults:
     def test_cannot_register_primitive_via_bind(self, resolver: Resolver):
         with pytest.raises(UnresolvablePrimitive) as exc_info:
             resolver.bind(str)
+        assert exc_info.value.type is str
+
+
+# ---------------------------------------------------------------------------
+# Annotated / qualified bindings
+# ---------------------------------------------------------------------------
+
+class TestAnnotated:
+    def test_annotated_singleton_resolved_via_annotation(self, resolver: Resolver):
+        foo = _Base()
+        resolver.singleton(FooBase, foo)
+        obj = resolver(_UsesFooAndBar, bar=_Base())
+        assert obj.foo is foo
+
+    def test_two_annotated_keys_same_class_different_instances(self, resolver: Resolver):
+        foo = _Base()
+        bar = _Base()
+        resolver.singleton(FooBase, foo)
+        resolver.singleton(BarBase, bar)
+        obj = resolver(_UsesFooAndBar)
+        assert obj.foo is foo
+        assert obj.bar is bar
+        assert obj.foo is not obj.bar
+
+    def test_annotated_type_alias_works_as_annotation(self, resolver: Resolver):
+        foo = _Base()
+        bar = _Base()
+        resolver.singleton(FooBase, foo)
+        resolver.singleton(BarBase, bar)
+        result = resolver(_UsesFooAndBar)
+        assert result.foo is foo
+        assert result.bar is bar
+
+    def test_annotated_factory_resolved_via_annotation(self, resolver: Resolver):
+        call_count = 0
+
+        def factory():
+            nonlocal call_count
+            call_count += 1
+            return _Base()
+
+        resolver.bind(FooBase, factory)
+        resolver.singleton(BarBase, _Base())
+        resolver(_UsesFooAndBar)
+        resolver(_UsesFooAndBar)
+        assert call_count == 2
+
+    def test_annotated_hard_crash_when_not_registered(self, resolver: Resolver):
+        resolver.singleton(BarBase, _Base())
+        with pytest.raises(UnboundTypeRequested):
+            resolver(_UsesFooAndBar)
+
+    def test_annotated_direct_resolution_when_registered(self, resolver: Resolver):
+        foo = _Base()
+        resolver.singleton(FooBase, foo)
+        assert resolver(FooBase) is foo
+
+    def test_annotated_direct_resolution_raises_when_not_registered(self, resolver: Resolver):
+        with pytest.raises(UnboundTypeRequested) as exc_info:
+            resolver(FooBase)
+        assert exc_info.value.type is FooBase
+
+    def test_annotated_contains_true_after_registration(self, resolver: Resolver):
+        assert FooBase not in resolver
+        resolver.singleton(FooBase, _Base())
+        assert FooBase in resolver
+
+    def test_annotated_singleton_created_from_base_type(self, resolver: Resolver):
+        instance = resolver.singleton(FooBase)
+        assert isinstance(instance, _Base)
+        assert resolver(FooBase) is instance
+
+    def test_annotated_bind_no_factory_creates_new_each_time(self, resolver: Resolver):
+        resolver.bind(FooBase)
+        first = resolver(FooBase)
+        second = resolver(FooBase)
+        assert isinstance(first, _Base)
+        assert first is not second
+
+    def test_optional_annotated_is_none_when_not_registered(self, resolver: Resolver):
+        obj = resolver(_UsesOptionalFoo)
+        assert obj.foo is None
+
+    def test_optional_annotated_resolved_when_registered(self, resolver: Resolver):
+        foo = _Base()
+        resolver.singleton(FooBase, foo)
+        obj = resolver(_UsesOptionalFoo)
+        assert obj.foo is foo
+
+    def test_annotated_primitive_blocked_in_singleton(self, resolver: Resolver):
+        AnnotatedInt = Annotated[int, _FooQualifier]
+        with pytest.raises(UnresolvablePrimitive) as exc_info:
+            resolver.singleton(AnnotatedInt, 42)
+        assert exc_info.value.type is int
+
+    def test_annotated_primitive_blocked_in_bind(self, resolver: Resolver):
+        AnnotatedStr = Annotated[str, _FooQualifier]
+        with pytest.raises(UnresolvablePrimitive) as exc_info:
+            resolver.bind(AnnotatedStr)
         assert exc_info.value.type is str
