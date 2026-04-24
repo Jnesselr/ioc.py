@@ -5,9 +5,9 @@ import inspect
 import threading
 import types
 import typing
-from typing import Optional, TypeVar, Union
+from typing import TypeVar, Union
 
-T = TypeVar('T')
+T = TypeVar("T")
 
 
 class ResolutionFailure(Exception):
@@ -61,7 +61,7 @@ class InvalidBinding(ResolutionFailure):
 
 
 def _is_primitive(t: type) -> bool:
-    return getattr(t, '__module__', None) == 'builtins'
+    return getattr(t, "__module__", None) == "builtins"
 
 
 def _get_base_type(t):
@@ -125,7 +125,7 @@ def _unwrap_optional(annotation) -> tuple[bool, type]:
 
 
 class Resolver:
-    _global_instance: Optional[Resolver] = None
+    _global_instance: Resolver | None = None
     _global_lock: threading.Lock = threading.Lock()
 
     def __init__(self):
@@ -155,15 +155,14 @@ class Resolver:
         return self._make(cls, *args, **kwargs)
 
     def _make(self, cls: type[T], *args, _contextual_key=None, **kwargs) -> T:
-        stack: list = getattr(self._local, 'stack', None)
+        stack: list = getattr(self._local, "stack", None)
         if stack is None:
             self._local.stack = stack = []
 
         if cls in stack:
             chain = [*stack, cls]
             raise CircularDependency(
-                "Circular dependency detected: "
-                + " → ".join(t.__name__ for t in chain),
+                "Circular dependency detected: " + " → ".join(t.__name__ for t in chain),
                 type_=cls,
                 chain=chain,
             )
@@ -176,13 +175,13 @@ class Resolver:
 
     def _make_inner(self, cls: type[T], *args, _contextual_key=None, **kwargs) -> T:
         lookup_key = _contextual_key if _contextual_key is not None else cls
-        own_defaults = self._contextual.get((lookup_key, _NO_NEEDS), {}).get('kwargs', {})
+        own_defaults = self._contextual.get((lookup_key, _NO_NEEDS), {}).get("kwargs", {})
 
         try:
             hints = typing.get_type_hints(cls.__init__, include_extras=True)
         except Exception:
             hints = {}
-        hints.pop('return', None)
+        hints.pop("return", None)
 
         sig = inspect.signature(cls)
 
@@ -194,20 +193,21 @@ class Resolver:
             has_var_keyword = False
         else:
             var_positional_name = next(
-                (name for name, p in sig.parameters.items()
-                 if p.kind == inspect.Parameter.VAR_POSITIONAL),
+                (
+                    name
+                    for name, p in sig.parameters.items()
+                    if p.kind == inspect.Parameter.VAR_POSITIONAL
+                ),
                 None,
             )
             has_var_keyword = any(
-                p.kind == inspect.Parameter.VAR_KEYWORD
-                for p in sig.parameters.values()
+                p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()
             )
 
         params = [
             (name, param)
             for name, param in sig.parameters.items()
-            if param.kind
-            not in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD)
+            if param.kind not in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD)
         ]
 
         args_dict: dict = {}
@@ -286,7 +286,7 @@ class Resolver:
 
         return instance
 
-    def when(self, consumer) -> '_WhenBuilder':
+    def when(self, consumer) -> _WhenBuilder:
         """Start a contextual binding rule for consumer."""
         return _WhenBuilder(self, consumer)
 
@@ -294,16 +294,16 @@ class Resolver:
         key = (consumer, needed)
         with self._lock:
             if key not in self._contextual:
-                self._contextual[key] = {'factory': None, 'kwargs': {}}
+                self._contextual[key] = {"factory": None, "kwargs": {}}
             entry = self._contextual[key]
             if factory is not None:
-                entry['factory'] = factory
+                entry["factory"] = factory
             if kw:
-                entry['kwargs'].update(kw)
+                entry["kwargs"].update(kw)
 
     def _resolve_contextual(self, ctx: dict, target_type) -> object:
-        factory = ctx.get('factory')
-        ctx_kwargs = ctx.get('kwargs', {})
+        factory = ctx.get("factory")
+        ctx_kwargs = ctx.get("kwargs", {})
 
         if factory is None:
             if typing.get_origin(target_type) is typing.Annotated:
@@ -326,17 +326,21 @@ class Resolver:
             base_type = typing.get_args(cls)[0]
             if _is_primitive(base_type):
                 raise UnresolvablePrimitive(
-                    f"`{base_type.__name__}` is a primitive type and cannot be registered with the resolver",
+                    f"`{base_type.__name__}` is a primitive type and cannot be registered"
+                    " with the resolver",
                     type_=base_type,
                 )
             if factory is None:
+
                 def factory(*a, **kw):
                     return self._make(base_type, *a, **kw)
             elif inspect.isclass(factory):
                 _check_subclass(base_type, factory)
                 concrete_cls = factory
+
                 def factory(*a, **kw):
                     return self._make(concrete_cls, *a, **kw)
+
             with self._lock:
                 self._factories[cls] = factory
             return
@@ -346,13 +350,16 @@ class Resolver:
                 type_=cls,
             )
         if factory is None:
+
             def factory(*a, **kw):
                 return self._make(cls, *a, **kw)
         elif inspect.isclass(factory):
             _check_subclass(cls, factory)
             concrete_cls = factory
+
             def factory(*a, **kw):
                 return self._make(concrete_cls, *a, **kw)
+
         with self._lock:
             self._factories[cls] = factory
 
@@ -370,7 +377,8 @@ class Resolver:
             base_type = typing.get_args(cls_or_instance)[0]
             if _is_primitive(base_type):
                 raise UnresolvablePrimitive(
-                    f"`{base_type.__name__}` is a primitive type and cannot be registered with the resolver",
+                    f"`{base_type.__name__}` is a primitive type and cannot be registered"
+                    " with the resolver",
                     type_=base_type,
                 )
             if instance is None:
@@ -392,7 +400,8 @@ class Resolver:
         )
         if _is_primitive(target_cls):
             raise UnresolvablePrimitive(
-                f"`{target_cls.__name__}` is a primitive type and cannot be registered with the resolver",
+                f"`{target_cls.__name__}` is a primitive type and cannot be registered"
+                " with the resolver",
                 type_=target_cls,
             )
 
@@ -437,9 +446,7 @@ class Resolver:
         with self._lock:
             new_resolver = Resolver()
             source = (
-                [t for t in self._singletons if t is not Resolver]
-                if not types
-                else list(types)
+                [t for t in self._singletons if t is not Resolver] if not types else list(types)
             )
             for t in source:
                 if t in self._singletons:
@@ -475,10 +482,10 @@ class _WhenBuilder:
         self._resolver = resolver
         self._consumer = consumer
 
-    def needs(self, needed) -> '_NeedsBuilder':
+    def needs(self, needed) -> _NeedsBuilder:
         return _NeedsBuilder(self._resolver, self._consumer, needed)
 
-    def give(self, **kwargs) -> '_WhenBuilder':
+    def give(self, **kwargs) -> _WhenBuilder:
         """Contribute default kwargs to the consumer's own constructor."""
         if kwargs:
             self._resolver._add_contextual(self._consumer, _NO_NEEDS, kw=kwargs)

@@ -1,26 +1,26 @@
 import abc
 import threading
-from typing import Annotated, NewType, Optional, Protocol
+from typing import Annotated, NewType, Protocol
 
 import pytest
 
 from ioc import (
-    Resolver,
-    ResolutionFailure,
-    Singleton,
     CircularDependency,
     DuplicateArgOfSameType,
     InvalidBinding,
+    ResolutionFailure,
+    Resolver,
+    Singleton,
     UnboundTypeRequested,
     UnknownArgument,
     UnknownKeywordArgument,
     UnresolvablePrimitive,
 )
 
-
 # ---------------------------------------------------------------------------
 # Annotated test helpers
 # ---------------------------------------------------------------------------
+
 
 class _Base:
     pass
@@ -45,13 +45,14 @@ class _UsesFooAndBar:
 
 
 class _UsesOptionalFoo:
-    def __init__(self, foo: Optional[FooBase] = None):
+    def __init__(self, foo: FooBase | None = None):
         self.foo = foo
 
 
 # ---------------------------------------------------------------------------
 # Test helpers
 # ---------------------------------------------------------------------------
+
 
 class NoArgumentClass:
     pass
@@ -63,7 +64,7 @@ class OneAnnotatedArgumentClass:
 
 
 class OptionalAnnotatedArgumentClass:
-    def __init__(self, arg: Optional[NoArgumentClass]):
+    def __init__(self, arg: NoArgumentClass | None):
         self.arg = arg
 
 
@@ -72,8 +73,8 @@ class OptionalUnionSyntaxClass:
         self.arg = arg
 
 
-AcsInstance = NewType('AcsInstance', NoArgumentClass)
-LogInstance = NewType('LogInstance', NoArgumentClass)
+AcsInstance = NewType("AcsInstance", NoArgumentClass)
+LogInstance = NewType("LogInstance", NoArgumentClass)
 
 
 class UsesBothNewTypes:
@@ -123,8 +124,9 @@ class HasVarKwargs:
 # Contextual binding helpers
 # ---------------------------------------------------------------------------
 
+
 class _Server:
-    def __init__(self, host: str = 'default', port: int = 80):
+    def __init__(self, host: str = "default", port: int = 80):
         self.host = host
         self.port = port
 
@@ -161,7 +163,7 @@ class _ServiceUsingSpecialCache:
 
 # Circular dependency helpers — forward refs resolved at call time by get_type_hints
 class _CircA:
-    def __init__(self, dep: '_CircB'):
+    def __init__(self, dep: "_CircB"):
         self.dep = dep
 
 
@@ -171,12 +173,12 @@ class _CircB:
 
 
 class _ChainA:
-    def __init__(self, dep: '_ChainB'):
+    def __init__(self, dep: "_ChainB"):
         self.dep = dep
 
 
 class _ChainB:
-    def __init__(self, dep: '_ChainC'):
+    def __init__(self, dep: "_ChainC"):
         self.dep = dep
 
 
@@ -188,6 +190,7 @@ class _ChainC:
 # ---------------------------------------------------------------------------
 # Basic resolution
 # ---------------------------------------------------------------------------
+
 
 class TestBasicResolution:
     def test_resolves_itself(self, resolver: Resolver):
@@ -273,6 +276,7 @@ class TestBasicResolution:
 # Args and kwargs
 # ---------------------------------------------------------------------------
 
+
 class TestArgsAndKwargs:
     def test_single_primitive_by_positional_arg(self, resolver: Resolver):
         obj = resolver(OneInt, 5)
@@ -302,7 +306,7 @@ class TestArgsAndKwargs:
             resolver(NoArgumentClass, a=3)
         ex = exc_info.value
         assert ex.argument_type is int
-        assert ex.argument_name == 'a'
+        assert ex.argument_name == "a"
         assert ex.argument == 3
 
     def test_optional_arg_is_none_when_not_bound(self, resolver: Resolver):
@@ -337,6 +341,7 @@ class TestArgsAndKwargs:
 # bind() — factory pattern
 # ---------------------------------------------------------------------------
 
+
 class TestBind:
     def test_bind_with_custom_factory_creates_new_instance_each_time(self, resolver: Resolver):
         call_count = 0
@@ -370,6 +375,7 @@ class TestBind:
 # ---------------------------------------------------------------------------
 # clear()
 # ---------------------------------------------------------------------------
+
 
 class TestClear:
     def test_clear_specific_class_removes_singleton(self, resolver: Resolver):
@@ -427,6 +433,7 @@ class TestClear:
 # Resolver.get() / Resolver.reset()
 # ---------------------------------------------------------------------------
 
+
 class TestGlobalResolver:
     def test_get_returns_same_instance(self):
         r1 = Resolver.get()
@@ -447,6 +454,7 @@ class TestGlobalResolver:
 # ---------------------------------------------------------------------------
 # clone()
 # ---------------------------------------------------------------------------
+
 
 class TestCloning:
     def test_clone_all_copies_singleton_bindings(self, resolver: Resolver):
@@ -506,6 +514,7 @@ class TestCloning:
 # Singleton ABC
 # ---------------------------------------------------------------------------
 
+
 class TestSingletonABC:
     def test_auto_registers_on_first_resolve(self, resolver: Resolver):
         first = resolver(AutoSingletonClass)
@@ -534,6 +543,7 @@ class TestSingletonABC:
 # clear() — additional cases
 # ---------------------------------------------------------------------------
 
+
 class TestClearAdditional:
     def test_clear_all_removes_factory_bindings(self, resolver: Resolver):
         call_count = 0
@@ -552,6 +562,7 @@ class TestClearAdditional:
 # ---------------------------------------------------------------------------
 # Exception hierarchy
 # ---------------------------------------------------------------------------
+
 
 class TestExceptionHierarchy:
     def test_duplicate_arg_is_resolution_failure(self, resolver: Resolver):
@@ -584,18 +595,19 @@ class TestExceptionHierarchy:
 # *args and **kwargs passthrough
 # ---------------------------------------------------------------------------
 
+
 class TestVariadicPassthrough:
     def test_extra_kwargs_passed_through_to_var_keyword(self, resolver: Resolver):
         dep = resolver.singleton(NoArgumentClass)
         obj = resolver(HasVarKwargs, extra=42, label="hi")
         assert obj.dep is dep
-        assert obj.kwargs == {'extra': 42, 'label': 'hi'}
+        assert obj.kwargs == {"extra": 42, "label": "hi"}
 
     def test_named_dep_resolved_and_unmatched_kwargs_passed_through(self, resolver: Resolver):
         resolver.singleton(NoArgumentClass)
         obj = resolver(HasVarKwargs, dep=NoArgumentClass(), note="x")
         assert isinstance(obj.dep, NoArgumentClass)
-        assert obj.kwargs == {'note': 'x'}
+        assert obj.kwargs == {"note": "x"}
 
     def test_extra_positional_args_passed_through_to_var_positional(self, resolver: Resolver):
         dep = resolver.singleton(NoArgumentClass)
@@ -612,6 +624,7 @@ class TestVariadicPassthrough:
 # ---------------------------------------------------------------------------
 # Default values
 # ---------------------------------------------------------------------------
+
 
 class TestDefaults:
     def test_primitive_with_default_uses_default(self, resolver: Resolver):
@@ -656,6 +669,7 @@ class TestDefaults:
 # ---------------------------------------------------------------------------
 # Annotated / qualified bindings
 # ---------------------------------------------------------------------------
+
 
 class TestAnnotated:
     def test_annotated_singleton_resolved_via_annotation(self, resolver: Resolver):
@@ -756,6 +770,7 @@ class TestAnnotated:
 # Instance type validation
 # ---------------------------------------------------------------------------
 
+
 class _Sub(NoArgumentClass):
     pass
 
@@ -763,6 +778,7 @@ class _Sub(NoArgumentClass):
 # ---------------------------------------------------------------------------
 # Abstract/Protocol binding test helpers
 # ---------------------------------------------------------------------------
+
 
 class _AbstractService(abc.ABC):
     @abc.abstractmethod
@@ -839,6 +855,7 @@ class TestInstanceTypeValidation:
 # Thread safety
 # ---------------------------------------------------------------------------
 
+
 class TestThreadSafety:
     _N = 50
 
@@ -859,7 +876,9 @@ class TestThreadSafety:
         assert len(results) == self._N
         assert all(r is results[0] for r in results)
 
-    def test_singleton_abc_auto_registration_returns_same_instance_under_contention(self, resolver: Resolver):
+    def test_singleton_abc_auto_registration_returns_same_instance_under_contention(
+        self, resolver: Resolver
+    ):
         results = []
         barrier = threading.Barrier(self._N)
 
@@ -897,6 +916,7 @@ class TestThreadSafety:
 # ---------------------------------------------------------------------------
 # Abstract / Protocol → concrete class binding
 # ---------------------------------------------------------------------------
+
 
 class TestAbstractBinding:
     def test_bind_abstract_to_concrete_resolves_concrete(self, resolver: Resolver):
@@ -951,6 +971,7 @@ class TestAbstractBinding:
 # Circular dependency detection
 # ---------------------------------------------------------------------------
 
+
 class TestCircularDependency:
     def test_two_way_cycle_raises(self, resolver: Resolver):
         with pytest.raises(CircularDependency):
@@ -987,6 +1008,7 @@ class TestCircularDependency:
 # Contextual bindings — when / needs / give
 # ---------------------------------------------------------------------------
 
+
 class TestContextualBindings:
     # --- give(factory) replacement ---
 
@@ -999,6 +1021,7 @@ class TestContextualBindings:
     def test_give_class_overrides_dependency(self, resolver: Resolver):
         class _AltCache(_CacheWithTtl):
             pass
+
         resolver.when(_ServiceUsingCache).needs(_CacheWithTtl).give(_AltCache)
         obj = resolver(_ServiceUsingCache)
         assert type(obj.cache) is _AltCache
@@ -1034,6 +1057,7 @@ class TestContextualBindings:
     def test_give_class_with_kwargs(self, resolver: Resolver):
         class _AltCache(_CacheWithTtl):
             pass
+
         resolver.when(_ServiceUsingCache).needs(_CacheWithTtl).give(_AltCache, ttl=42)
         obj = resolver(_ServiceUsingCache)
         assert type(obj.cache) is _AltCache
@@ -1082,7 +1106,7 @@ class TestContextualBindings:
         resolver.when(_ServiceUsingCache).needs(_CacheWithTtl).give(ttl=500)
         a = resolver(_ServiceUsingCache)
         b = resolver(_OtherServiceUsingCache)
-        assert a.cache.ttl == 500   # contextual wins
+        assert a.cache.ttl == 500  # contextual wins
         assert b.cache.ttl == 2000  # global applies
 
     def test_global_defaults_overridden_by_explicit_kwarg(self, resolver: Resolver):
@@ -1091,25 +1115,29 @@ class TestContextualBindings:
         assert cache.ttl == 99
 
     def test_global_defaults_for_unannotated_primitive_param(self, resolver: Resolver):
-        resolver.when(_Server).give(host='myhost', port=9000)
+        resolver.when(_Server).give(host="myhost", port=9000)
         server = resolver(_Server)
-        assert server.host == 'myhost'
+        assert server.host == "myhost"
         assert server.port == 9000
 
     # --- chaining multiple needs ---
 
     def test_chained_needs_on_same_when(self, resolver: Resolver):
         special_cache = _CacheWithTtl(ttl=1)
-        special_server = _Server(host='x')
+        special_server = _Server(host="x")
 
         class _Multi:
             def __init__(self, cache: _CacheWithTtl, server: _Server):
                 self.cache = cache
                 self.server = server
 
-        (resolver.when(_Multi)
-            .needs(_CacheWithTtl).give(lambda: special_cache)
-            .needs(_Server).give(lambda: special_server))
+        (
+            resolver.when(_Multi)
+            .needs(_CacheWithTtl)
+            .give(lambda: special_cache)
+            .needs(_Server)
+            .give(lambda: special_server)
+        )
 
         obj = resolver(_Multi)
         assert obj.cache is special_cache
