@@ -1120,9 +1120,9 @@ class TestContextualBindings:
         assert server.host == "myhost"
         assert server.port == 9000
 
-    # --- chaining multiple needs ---
+    # --- multiple needs on same consumer ---
 
-    def test_chained_needs_on_same_when(self, resolver: Resolver):
+    def test_multiple_needs_on_same_consumer(self, resolver: Resolver):
         special_cache = _CacheWithTtl(ttl=1)
         special_server = _Server(host="x")
 
@@ -1131,13 +1131,8 @@ class TestContextualBindings:
                 self.cache = cache
                 self.server = server
 
-        (
-            resolver.when(_Multi)
-            .needs(_CacheWithTtl)
-            .give(lambda: special_cache)
-            .needs(_Server)
-            .give(lambda: special_server)
-        )
+        resolver.when(_Multi).needs(_CacheWithTtl).give(lambda: special_cache)
+        resolver.when(_Multi).needs(_Server).give(lambda: special_server)
 
         obj = resolver(_Multi)
         assert obj.cache is special_cache

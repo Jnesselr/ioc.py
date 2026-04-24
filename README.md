@@ -243,18 +243,6 @@ class LruCache(Cache):
 resolver.when(ReportService).needs(Cache).give(LruCache, ttl=7200, max_entries=50)
 ```
 
-### Chain multiple needs on one consumer
-
-```python
-class ApiClient:
-    def __init__(self, cache: Cache, db: Database):
-        ...
-
-(resolver.when(ApiClient)
-    .needs(Cache).give(ttl=60)
-    .needs(Database).give(lambda: Database(url="postgresql://api/db")))
-```
-
 ### Global defaults
 
 `when(X).give(**kwargs)` with no `needs()` sets default constructor arguments for every resolution of `X`, regardless of which consumer triggers it:
@@ -285,10 +273,10 @@ You can use an `Annotated` type as a named resolution profile. When a consumer's
 _ReportCacheKey = object()
 ReportCache = Annotated[Cache, _ReportCacheKey]
 
-# ReportCache profile: Cache with large capacity
-resolver.when(ReportCache).needs(Cache).give(ttl=7200, max_entries=1000)
+# Set defaults for the ReportCache profile
+resolver.when(ReportCache).give(ttl=7200, max_entries=1000)
 
-# Direct consumers
+# Consumers can type-hint ReportCache directly
 class ReportService:
     def __init__(self, cache: ReportCache):
         ...
@@ -308,15 +296,16 @@ Resolver.reset()            # discards it; next .get() creates a fresh one
 
 ## Cloning
 
-Create a child resolver that inherits specific singleton bindings from a parent:
+Create a child resolver that inherits specific singleton bindings from a parent. Pass as many types as you want to keep:
 
 ```python
 parent = Resolver()
 parent.singleton(Database, prod_db)
 parent.singleton(AppConfig, config)
+parent.singleton(UserRepository, repo)
 
-# Child inherits only Database; AppConfig must be re-registered or re-resolved
-child = parent.clone(Database)
+# Inherit any subset of singletons; anything not listed must be re-registered or re-resolved
+child = parent.clone(Database, UserRepository)
 child.singleton(AppConfig, test_config)
 ```
 

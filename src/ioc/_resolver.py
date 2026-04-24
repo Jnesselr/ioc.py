@@ -498,7 +498,7 @@ class _NeedsBuilder:
         self._consumer = consumer
         self._needed = needed
 
-    def give(self, factory=_GIVE_UNSET, **kwargs) -> _WhenBuilder:
+    def give(self, factory=_GIVE_UNSET, **kwargs) -> None:
         """
         Forms:
           give(factory_or_class)         — replacement
@@ -508,4 +508,3 @@ class _NeedsBuilder:
         f = None if factory is _GIVE_UNSET else factory
         if f is not None or kwargs:
             self._resolver._add_contextual(self._consumer, self._needed, factory=f, kw=kwargs)
-        return _WhenBuilder(self._resolver, self._consumer)
