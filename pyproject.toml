@@ -1,5 +1,5 @@
 [project]
-name = "ioc-py"
+name = "type-ioc"
 version = "0.1.0"
 description = "A lightweight dependency inversion/IoC container for Python"
 license = { text = "MIT" }
