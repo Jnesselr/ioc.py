@@ -100,6 +100,9 @@ def _check_subclass(abstract: type, concrete: type) -> None:
         pass  # e.g. non-runtime_checkable Protocol
 
 
+_NO_NEEDS = object()  # sentinel: when(X).give(**kw) with no needs() call
+
+
 class Singleton(abc.ABC):
     """Inherit from this to make a class auto-register as a singleton on first resolution."""
 
@@ -128,6 +131,7 @@ class Resolver:
     def __init__(self):
         self._singletons: dict = {}
         self._factories: dict = {}
+        self._contextual: dict = {}
         self._singletons[Resolver] = self
         self._lock = threading.RLock()
         self._local = threading.local()
@@ -150,7 +154,7 @@ class Resolver:
             )
         return self._make(cls, *args, **kwargs)
 
-    def _make(self, cls: type[T], *args, **kwargs) -> T:
+    def _make(self, cls: type[T], *args, _contextual_key=None, **kwargs) -> T:
         stack: list = getattr(self._local, 'stack', None)
         if stack is None:
             self._local.stack = stack = []
@@ -166,11 +170,14 @@ class Resolver:
 
         stack.append(cls)
         try:
-            return self._make_inner(cls, *args, **kwargs)
+            return self._make_inner(cls, *args, _contextual_key=_contextual_key, **kwargs)
         finally:
             stack.pop()
 
-    def _make_inner(self, cls: type[T], *args, **kwargs) -> T:
+    def _make_inner(self, cls: type[T], *args, _contextual_key=None, **kwargs) -> T:
+        lookup_key = _contextual_key if _contextual_key is not None else cls
+        own_defaults = self._contextual.get((lookup_key, _NO_NEEDS), {}).get('kwargs', {})
+
         try:
             hints = typing.get_type_hints(cls.__init__, include_extras=True)
         except Exception:
@@ -223,8 +230,13 @@ class Resolver:
                 is_opt, inner_type = _unwrap_optional(annotation)
                 base_type = _get_base_type(inner_type)
 
-                if inner_type in args_dict:
+                ctx = self._contextual.get((lookup_key, inner_type))
+                if ctx is not None:
+                    cls_kwargs[name] = self._resolve_contextual(ctx, inner_type)
+                elif inner_type in args_dict:
                     cls_kwargs[name] = args_dict.pop(inner_type)
+                elif name in own_defaults:
+                    cls_kwargs[name] = own_defaults[name]
                 elif is_opt and inner_type not in self:
                     cls_kwargs[name] = None
                 elif param.default is not inspect.Parameter.empty and inner_type not in self:
@@ -237,6 +249,8 @@ class Resolver:
                     )
                 else:
                     cls_kwargs[name] = self(inner_type)
+            elif name in own_defaults:
+                cls_kwargs[name] = own_defaults[name]
 
         if args_dict and var_positional_name is None:
             arg_type, arg = next(iter(args_dict.items()))
@@ -271,6 +285,40 @@ class Resolver:
                     instance = self._singletons[cls]
 
         return instance
+
+    def when(self, consumer) -> '_WhenBuilder':
+        """Start a contextual binding rule for consumer."""
+        return _WhenBuilder(self, consumer)
+
+    def _add_contextual(self, consumer, needed, factory=None, kw=None) -> None:
+        key = (consumer, needed)
+        with self._lock:
+            if key not in self._contextual:
+                self._contextual[key] = {'factory': None, 'kwargs': {}}
+            entry = self._contextual[key]
+            if factory is not None:
+                entry['factory'] = factory
+            if kw:
+                entry['kwargs'].update(kw)
+
+    def _resolve_contextual(self, ctx: dict, target_type) -> object:
+        factory = ctx.get('factory')
+        ctx_kwargs = ctx.get('kwargs', {})
+
+        if factory is None:
+            if typing.get_origin(target_type) is typing.Annotated:
+                base = typing.get_args(target_type)[0]
+                return self._make(base, _contextual_key=target_type, **ctx_kwargs)
+            return self._make(target_type, **ctx_kwargs)
+
+        if typing.get_origin(factory) is typing.Annotated:
+            base = typing.get_args(factory)[0]
+            return self._make(base, _contextual_key=factory, **ctx_kwargs)
+
+        if inspect.isclass(factory):
+            return self._make(factory, **ctx_kwargs)
+
+        return factory()  # plain callable — ctx_kwargs ignored
 
     def bind(self, cls: type[T], factory=None) -> None:
         """Register a factory for cls. Each call to resolver(cls) invokes the factory anew."""
@@ -417,3 +465,40 @@ class Resolver:
         """Discard the process-wide Resolver."""
         with cls._global_lock:
             cls._global_instance = None
+
+
+_GIVE_UNSET = object()
+
+
+class _WhenBuilder:
+    def __init__(self, resolver: Resolver, consumer):
+        self._resolver = resolver
+        self._consumer = consumer
+
+    def needs(self, needed) -> '_NeedsBuilder':
+        return _NeedsBuilder(self._resolver, self._consumer, needed)
+
+    def give(self, **kwargs) -> '_WhenBuilder':
+        """Contribute default kwargs to the consumer's own constructor."""
+        if kwargs:
+            self._resolver._add_contextual(self._consumer, _NO_NEEDS, kw=kwargs)
+        return self
+
+
+class _NeedsBuilder:
+    def __init__(self, resolver: Resolver, consumer, needed):
+        self._resolver = resolver
+        self._consumer = consumer
+        self._needed = needed
+
+    def give(self, factory=_GIVE_UNSET, **kwargs) -> _WhenBuilder:
+        """
+        Forms:
+          give(factory_or_class)         — replacement
+          give(factory_or_class, **kw)   — replacement + kwargs to its constructor
+          give(**kw)                     — kwargs contribution only (no replacement)
+        """
+        f = None if factory is _GIVE_UNSET else factory
+        if f is not None or kwargs:
+            self._resolver._add_contextual(self._consumer, self._needed, factory=f, kw=kwargs)
+        return _WhenBuilder(self._resolver, self._consumer)

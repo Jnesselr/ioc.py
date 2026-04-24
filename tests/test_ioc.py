@@ -119,6 +119,46 @@ class HasVarKwargs:
         self.kwargs = kwargs
 
 
+# ---------------------------------------------------------------------------
+# Contextual binding helpers
+# ---------------------------------------------------------------------------
+
+class _Server:
+    def __init__(self, host: str = 'default', port: int = 80):
+        self.host = host
+        self.port = port
+
+
+class _CacheWithTtl:
+    def __init__(self, ttl: int = 3600, max_entries: int = 100):
+        self.ttl = ttl
+        self.max_entries = max_entries
+
+
+class _ServiceUsingCache:
+    def __init__(self, cache: _CacheWithTtl):
+        self.cache = cache
+
+
+class _OtherServiceUsingCache:
+    def __init__(self, cache: _CacheWithTtl):
+        self.cache = cache
+
+
+class _ServiceUsingServer:
+    def __init__(self, server: _Server):
+        self.server = server
+
+
+_SpecialCacheKey = object()
+SpecialCache = Annotated[_CacheWithTtl, _SpecialCacheKey]
+
+
+class _ServiceUsingSpecialCache:
+    def __init__(self, cache: SpecialCache):
+        self.cache = cache
+
+
 # Circular dependency helpers — forward refs resolved at call time by get_type_hints
 class _CircA:
     def __init__(self, dep: '_CircB'):
@@ -941,3 +981,136 @@ class TestCircularDependency:
             resolver(_CircA)
         obj = resolver(NoArgumentClass)
         assert isinstance(obj, NoArgumentClass)
+
+
+# ---------------------------------------------------------------------------
+# Contextual bindings — when / needs / give
+# ---------------------------------------------------------------------------
+
+class TestContextualBindings:
+    # --- give(factory) replacement ---
+
+    def test_give_factory_overrides_dependency(self, resolver: Resolver):
+        special = _CacheWithTtl(ttl=999)
+        resolver.when(_ServiceUsingCache).needs(_CacheWithTtl).give(lambda: special)
+        obj = resolver(_ServiceUsingCache)
+        assert obj.cache is special
+
+    def test_give_class_overrides_dependency(self, resolver: Resolver):
+        class _AltCache(_CacheWithTtl):
+            pass
+        resolver.when(_ServiceUsingCache).needs(_CacheWithTtl).give(_AltCache)
+        obj = resolver(_ServiceUsingCache)
+        assert type(obj.cache) is _AltCache
+
+    def test_give_only_applies_to_named_consumer(self, resolver: Resolver):
+        special = _CacheWithTtl(ttl=999)
+        resolver.when(_ServiceUsingCache).needs(_CacheWithTtl).give(lambda: special)
+        other = resolver(_OtherServiceUsingCache)
+        assert other.cache is not special
+
+    # --- give(**kwargs) contribution ---
+
+    def test_give_kwargs_passed_to_dependency_constructor(self, resolver: Resolver):
+        resolver.when(_ServiceUsingCache).needs(_CacheWithTtl).give(ttl=500)
+        obj = resolver(_ServiceUsingCache)
+        assert obj.cache.ttl == 500
+
+    def test_give_kwargs_accumulate_across_calls(self, resolver: Resolver):
+        resolver.when(_ServiceUsingCache).needs(_CacheWithTtl).give(ttl=500)
+        resolver.when(_ServiceUsingCache).needs(_CacheWithTtl).give(max_entries=10)
+        obj = resolver(_ServiceUsingCache)
+        assert obj.cache.ttl == 500
+        assert obj.cache.max_entries == 10
+
+    def test_give_kwargs_last_wins_on_conflict(self, resolver: Resolver):
+        resolver.when(_ServiceUsingCache).needs(_CacheWithTtl).give(ttl=500)
+        resolver.when(_ServiceUsingCache).needs(_CacheWithTtl).give(ttl=999)
+        obj = resolver(_ServiceUsingCache)
+        assert obj.cache.ttl == 999
+
+    # --- give(class, **kwargs) combined ---
+
+    def test_give_class_with_kwargs(self, resolver: Resolver):
+        class _AltCache(_CacheWithTtl):
+            pass
+        resolver.when(_ServiceUsingCache).needs(_CacheWithTtl).give(_AltCache, ttl=42)
+        obj = resolver(_ServiceUsingCache)
+        assert type(obj.cache) is _AltCache
+        assert obj.cache.ttl == 42
+
+    def test_give_same_class_with_kwargs_is_valid(self, resolver: Resolver):
+        resolver.when(_ServiceUsingCache).needs(_CacheWithTtl).give(_CacheWithTtl, ttl=77)
+        obj = resolver(_ServiceUsingCache)
+        assert obj.cache.ttl == 77
+
+    # --- give(Annotated, **kwargs) — contextual identity ---
+
+    def test_give_annotated_uses_annotated_context(self, resolver: Resolver):
+        resolver.when(SpecialCache).needs(_CacheWithTtl).give(ttl=123)
+        # SpecialCache = Annotated[_CacheWithTtl, _SpecialCacheKey]
+        # This is nonsensical (Cache needs itself) but demonstrates lookup_key
+        # Better test: use give(SpecialCache) for a consumer
+        resolver.when(_ServiceUsingSpecialCache).needs(SpecialCache).give(ttl=456)
+        obj = resolver(_ServiceUsingSpecialCache)
+        assert obj.cache.ttl == 456
+
+    def test_give_annotated_profile_for_nested_context(self, resolver: Resolver):
+        # PhotoController pattern: when(Consumer).needs(Dep).give(AnnotatedDep)
+        # and when(AnnotatedDep).needs(SubDep).give(...)
+        resolver.when(_ServiceUsingCache).needs(_CacheWithTtl).give(SpecialCache, ttl=789)
+        # when(_ServiceUsingCache) resolves _CacheWithTtl as SpecialCache context with ttl=789
+        obj = resolver(_ServiceUsingCache)
+        assert obj.cache.ttl == 789
+
+    # --- when(X).give(**kwargs) — global defaults (no needs) ---
+
+    def test_global_defaults_applied_to_own_constructor(self, resolver: Resolver):
+        resolver.when(_CacheWithTtl).give(ttl=2000)
+        cache = resolver(_CacheWithTtl)
+        assert cache.ttl == 2000
+
+    def test_global_defaults_apply_to_all_consumers(self, resolver: Resolver):
+        resolver.when(_CacheWithTtl).give(ttl=2000)
+        a = resolver(_ServiceUsingCache)
+        b = resolver(_OtherServiceUsingCache)
+        assert a.cache.ttl == 2000
+        assert b.cache.ttl == 2000
+
+    def test_global_defaults_overridden_by_contextual(self, resolver: Resolver):
+        resolver.when(_CacheWithTtl).give(ttl=2000)
+        resolver.when(_ServiceUsingCache).needs(_CacheWithTtl).give(ttl=500)
+        a = resolver(_ServiceUsingCache)
+        b = resolver(_OtherServiceUsingCache)
+        assert a.cache.ttl == 500   # contextual wins
+        assert b.cache.ttl == 2000  # global applies
+
+    def test_global_defaults_overridden_by_explicit_kwarg(self, resolver: Resolver):
+        resolver.when(_CacheWithTtl).give(ttl=2000)
+        cache = resolver(_CacheWithTtl, ttl=99)
+        assert cache.ttl == 99
+
+    def test_global_defaults_for_unannotated_primitive_param(self, resolver: Resolver):
+        resolver.when(_Server).give(host='myhost', port=9000)
+        server = resolver(_Server)
+        assert server.host == 'myhost'
+        assert server.port == 9000
+
+    # --- chaining multiple needs ---
+
+    def test_chained_needs_on_same_when(self, resolver: Resolver):
+        special_cache = _CacheWithTtl(ttl=1)
+        special_server = _Server(host='x')
+
+        class _Multi:
+            def __init__(self, cache: _CacheWithTtl, server: _Server):
+                self.cache = cache
+                self.server = server
+
+        (resolver.when(_Multi)
+            .needs(_CacheWithTtl).give(lambda: special_cache)
+            .needs(_Server).give(lambda: special_server))
+
+        obj = resolver(_Multi)
+        assert obj.cache is special_cache
+        assert obj.server is special_server
