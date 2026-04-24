@@ -8,6 +8,7 @@ from ioc import (
     Resolver,
     ResolutionFailure,
     Singleton,
+    CircularDependency,
     DuplicateArgOfSameType,
     InvalidBinding,
     UnboundTypeRequested,
@@ -116,6 +117,32 @@ class HasVarKwargs:
     def __init__(self, dep: NoArgumentClass, **kwargs):
         self.dep = dep
         self.kwargs = kwargs
+
+
+# Circular dependency helpers — forward refs resolved at call time by get_type_hints
+class _CircA:
+    def __init__(self, dep: '_CircB'):
+        self.dep = dep
+
+
+class _CircB:
+    def __init__(self, dep: _CircA):
+        self.dep = dep
+
+
+class _ChainA:
+    def __init__(self, dep: '_ChainB'):
+        self.dep = dep
+
+
+class _ChainB:
+    def __init__(self, dep: '_ChainC'):
+        self.dep = dep
+
+
+class _ChainC:
+    def __init__(self, dep: _ChainA):
+        self.dep = dep
 
 
 # ---------------------------------------------------------------------------
@@ -878,3 +905,39 @@ class TestAbstractBinding:
         instance = _ConcreteService()
         resolver.singleton(_AbstractService, instance)
         assert resolver(_AbstractService) is instance
+
+
+# ---------------------------------------------------------------------------
+# Circular dependency detection
+# ---------------------------------------------------------------------------
+
+class TestCircularDependency:
+    def test_two_way_cycle_raises(self, resolver: Resolver):
+        with pytest.raises(CircularDependency):
+            resolver(_CircA)
+
+    def test_three_way_cycle_raises(self, resolver: Resolver):
+        with pytest.raises(CircularDependency):
+            resolver(_ChainA)
+
+    def test_circular_dependency_is_resolution_failure(self, resolver: Resolver):
+        with pytest.raises(ResolutionFailure):
+            resolver(_CircA)
+
+    def test_exception_type_is_re_entrant_type(self, resolver: Resolver):
+        with pytest.raises(CircularDependency) as exc_info:
+            resolver(_CircA)
+        assert exc_info.value.type is _CircA
+
+    def test_exception_chain_shows_full_cycle(self, resolver: Resolver):
+        with pytest.raises(CircularDependency) as exc_info:
+            resolver(_ChainA)
+        chain = exc_info.value.chain
+        assert chain[0] is _ChainA
+        assert chain[-1] is _ChainA
+
+    def test_resolver_still_works_after_circular_dependency_error(self, resolver: Resolver):
+        with pytest.raises(CircularDependency):
+            resolver(_CircA)
+        obj = resolver(NoArgumentClass)
+        assert isinstance(obj, NoArgumentClass)

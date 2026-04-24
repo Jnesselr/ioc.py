@@ -1,4 +1,5 @@
 from ioc._resolver import (
+    CircularDependency,
     DuplicateArgOfSameType,
     InvalidBinding,
     Resolver,
@@ -14,6 +15,7 @@ __all__ = [
     "Resolver",
     "Singleton",
     "ResolutionFailure",
+    "CircularDependency",
     "DuplicateArgOfSameType",
     "InvalidBinding",
     "UnknownArgument",

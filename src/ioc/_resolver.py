@@ -46,6 +46,13 @@ class UnresolvablePrimitive(ResolutionFailure):
         self.type = type_
 
 
+class CircularDependency(ResolutionFailure):
+    def __init__(self, message: str, type_: type, chain: list):
+        super().__init__(message)
+        self.type = type_
+        self.chain = chain
+
+
 class InvalidBinding(ResolutionFailure):
     def __init__(self, message: str, expected_type: type, instance):
         super().__init__(message)
@@ -123,6 +130,7 @@ class Resolver:
         self._factories: dict = {}
         self._singletons[Resolver] = self
         self._lock = threading.RLock()
+        self._local = threading.local()
 
     def __call__(self, cls: type[T], *args, **kwargs) -> T:
         if cls in self._singletons:
@@ -143,6 +151,26 @@ class Resolver:
         return self._make(cls, *args, **kwargs)
 
     def _make(self, cls: type[T], *args, **kwargs) -> T:
+        stack: list = getattr(self._local, 'stack', None)
+        if stack is None:
+            self._local.stack = stack = []
+
+        if cls in stack:
+            chain = [*stack, cls]
+            raise CircularDependency(
+                "Circular dependency detected: "
+                + " → ".join(t.__name__ for t in chain),
+                type_=cls,
+                chain=chain,
+            )
+
+        stack.append(cls)
+        try:
+            return self._make_inner(cls, *args, **kwargs)
+        finally:
+            stack.pop()
+
+    def _make_inner(self, cls: type[T], *args, **kwargs) -> T:
         try:
             hints = typing.get_type_hints(cls.__init__, include_extras=True)
         except Exception:
