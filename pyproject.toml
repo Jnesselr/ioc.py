@@ -2,6 +2,7 @@
 name = "type-ioc"
 version = "0.1.0"
 description = "A lightweight dependency inversion/IoC container for Python"
+readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.10"
 dependencies = []
